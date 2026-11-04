@@ -827,7 +827,8 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 
   var CUR_WORDS = [['달러', 'USD'], ['불', 'USD'], ['엔', 'JPY'], ['위안', 'CNY']];
 
-  /* 말한 문장 → { cmd, expr, cur, dir } 또는 { error } */
+  /* 말한 문장 → { cmd, expr, cur, dir } 또는 { error }
+     "A의 B%"·"A에 B%" = A×B%, "A에 B% 더하기/부가세" = A+B%, "A에서 B% 할인" = A−B% */
   function parseVoice(text) {
     var t = String(text || '').toLowerCase().replace(/[?!。.]+$/g, '').trim();
     if (!t) return { error: 'empty' };
@@ -843,34 +844,57 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
       var idxWon = t.indexOf('원');
       dir = (idxWon !== -1 && idxWon < idxCur) ? 'TO' : 'FROM';
     }
+    var subtract = /할인|세일|dc|빼|뺀|감소|내리|내린|인하|차감|깎|마이너스/.test(t);
+    var addVerb = /부가가치세|부가세|세금|수수료|팁|이자|할증|추가|인상|올리|올린|더하|더한|더해|플러스/.test(t);
 
     var s = t
-      .replace(/얼마|계산해줘|계산해 줘|계산|결과|환산해줘|환산해 줘|환산|바꿔줘|바꿔 줘|바꾸면|알려줘|알려 줘|해줘|해 줘|입니다|이에요|는$|은$|=/g, ' ')
+      .replace(/얼마|계산해줘|계산해 줘|계산|결과|환산해줘|환산해 줘|환산|바꿔줘|바꿔 줘|바꾸면|알려줘|알려 줘|해줘|해 줘|입니다|이에요|=/g, ' ')
+      .replace(/부가가치세|부가세|세금|수수료|팁|이자|할증|추가|인상|인하|올리면|내리면|올린|내린|할인된|할인|세일|dc|적용|가격|금액/g, ' ')
       .replace(/달러|불|엔|위안/g, ' ')
       .replace(/으로|로/g, ' ')
       .replace(/원/g, ' ')
-      .replace(/더하기|플러스|더한|더해|합하기/g, ' + ')
-      .replace(/빼기|마이너스|뺀|빼/g, ' − ')
-      .replace(/곱하기|곱한|곱해|곱|엑스/g, ' × ')
+      .replace(/[는은을를가요죠까]/g, ' ')
+      .replace(/(\d)\s+(\d+(?:\.\d+)?)\s*(?:%|퍼센트|프로)/g, '$1 ⊕ $2 % ')
+      .replace(/에서/g, ' ⊖ ')
+      .replace(/에/g, ' ⊕ ')
+      .replace(/의/g, ' ⊗ ')
+      .replace(/더하기|더하|더한|더해|플러스|합하기/g, ' + ')
+      .replace(/빼기|뺀|빼|마이너스/g, ' − ')
+      .replace(/곱하기|곱하|곱한|곱해|곱|엑스/g, ' × ')
       .replace(/나누기|나눠|나눈|나누/g, ' ÷ ')
       .replace(/퍼센트|프로/g, ' % ')
+      .replace(/면/g, ' ')
       .replace(/[x*]/g, ' × ')
       .replace(/\//g, ' ÷ ')
       .replace(/(^|[^\d])-|−/g, function (m, p) { return (p || '') + ' − '; })
       .replace(/\+/g, ' + ');
     s = s.replace(/(\d)\s*-\s*(\d)/g, '$1 − $2');
 
-    var pieces = s.split(/([+−×÷%])/);
-    var out = '';
+    var pieces = s.split(/([+−×÷%⊕⊖⊗])/);
+    var toks = [];
     for (var i = 0; i < pieces.length; i++) {
       var seg = pieces[i].trim();
       if (!seg) continue;
-      if (/^[+−×÷%]$/.test(seg)) { out += seg; continue; }
+      if (/^[+−×÷%⊕⊖⊗]$/.test(seg)) { toks.push({ op: seg }); continue; }
       if (/\d\s+\d/.test(seg)) return { error: 'numbers' };
       var n = koNumber(seg);
       if (isNaN(n) || !isFinite(n) || n >= 1e15) return { error: 'number:' + seg };
-      out += String(n);
+      toks.push({ n: String(n) });
     }
+    var out = '';
+    for (var k = 0; k < toks.length; k++) {
+      var tk = toks[k];
+      if (tk.n !== undefined) { out += tk.n; continue; }
+      var o = tk.op;
+      if (o === '⊗') o = '×';
+      else if (o === '⊖') o = '−';
+      else if (o === '⊕') {
+        var pct = toks[k + 1] && toks[k + 1].n !== undefined && toks[k + 2] && toks[k + 2].op === '%';
+        o = !pct ? '+' : subtract ? '−' : addVerb ? '+' : '×';
+      }
+      out += o;
+    }
+    out = out.replace(/[+−×÷]+$/, '');
     if (!out) return { error: 'empty' };
     return { expr: out, cur: cur, dir: dir };
   }
